@@ -2,11 +2,29 @@
 
 import sys
 import pandas as pd
+import numpy as np
 
 PHYSASTRO = ['quantum', 'astro', 'photonics', 'biophotonics']
 COL_LOOKUP = {
     'author': 'AUTHORS',
     'journal': 'PARENT_DOC',
+    'for1_e15': 'FOR1_E15',
+    'for1perc_e15': 'FOR1PERC_E15',
+    'for2_e15': 'FOR2_E15',
+    'for2perc_e15': 'FOR2PERC_E15',
+    'for3_e15': 'FOR3_E15',
+    'for3perc_e15': 'FOR3PERC_E15',
+    'for4_e15': 'FOR4_E15',
+    'for4perc_e15': 'FOR4PERC_E15',
+    'for1_e18': 'ERA_18_FOR1',
+    'for1perc_e18': 'ERA_18_FOR1%',
+    'for2_e18': 'ERA_18_FOR2',
+    'for2perc_e18': 'ERA_18_FOR2%',
+    'for3_e18': 'ERA_18_FOR3',
+    'for3perc_e18': 'ERA_18_FOR3%',
+    'for4_e18': 'ERA_18_FOR4',
+    'for4perc_e18': 'ERA_18_FOR4%',
+    'clawback': 'ERA_18_FOR4_ClawBack_Justify'
 }
 
 
@@ -106,14 +124,35 @@ class EraFixer(object):
                 continue
 
             df = self.df.query('DISCIPLINE == "{}"'.format(disc))
-            save_name = '{}_{}'.format(prefix, disc)
-            self.save(df=df, save_name=save_name)
-            save_list.push(save_name)
+            save_name = self.save(df=df, save_name='{}_{}'.format(prefix, disc))
+            save_list.append(save_name)
 
         return save_list
 
     def carry_forward_forcs(self):
-        pass
+        """ For each line, if there are values for 2015 FOR codes and HANDLED
+
+        """
+        # Find rows that are not handled yet
+        matches = self.get_matching_rows(0, 'HANDLED', blank_discipline=False)
+
+        if(len(matches) > 0):
+            self._print("Copying 2015 FOR codes to 2018 for unhandled rows")
+
+            not_handled = self.df.HANDLED == 0
+            for col_2015 in COL_LOOKUP.keys():
+                if 'e15' not in col_2015:
+                    continue
+
+                col_2018 = col_2015.replace('e15', 'e18')
+
+                col_has_values = self.df.loc[not_handled, (COL_LOOKUP[col_2015])].apply(str) != 'nan'
+                condition = col_has_values[col_has_values].index
+
+                self.df.loc[condition, (COL_LOOKUP[col_2018])] = \
+                    self.df.loc[condition, (COL_LOOKUP[col_2015])]
+
+                self.df.loc[condition, ('HANDLED')] = 1
 
     def get_matching_rows(self, search_term, column, blank_discipline=True):
         """Find rows that match the search_term for the given column
@@ -131,7 +170,7 @@ class EraFixer(object):
         match_indexes = [
             idx
             for idx, row in enumerate(self.df[column])
-            if search_term.lower().strip() in str(row).lower()
+            if str(search_term).lower().strip() in str(row).lower()
         ]
 
         # Get indexes of match_indexes - NOTE confusing index of indexes
@@ -224,12 +263,13 @@ class EraFixer(object):
                 df.to_excel(writer)
                 writer.save()
         else:
+            save_name = self.fn
             # Specify a writer for saving
-            writer = pd.ExcelWriter(self.fn, engine='xlsxwriter')
+            writer = pd.ExcelWriter(save_name, engine='xlsxwriter')
 
             # Write dataframe to file (all sheets)
             for sheet in self.xls.sheet_names:
-                self._print("Writing sheet '{}' to {}".format(sheet, self.fn))
+                self._print("Writing sheet '{}' to {}".format(sheet, save_name))
 
                 if sheet == self.xls.sheet_names[self.sheet_index]:
                     self.df.to_excel(writer, sheet)
@@ -238,6 +278,8 @@ class EraFixer(object):
 
             # Save the result
             writer.save()
+
+        return save_name
 
     def _match_name(self, full_string, search_name, column):
         """ Check if search_name is in full_string
@@ -255,8 +297,8 @@ class EraFixer(object):
         Returns:
             bool: If match found, default False
         """
-        full_string = full_string.lower().strip()
-        search_name = search_name.lower().strip()
+        full_string = str(full_string).lower().strip()
+        search_name = str(search_name).lower().strip()
         found = False
 
         # Get the name
@@ -265,6 +307,8 @@ class EraFixer(object):
             full_name = full_name.split()
         elif column == COL_LOOKUP['journal']:
             full_name = self.get_journal_name(full_string, search_name)
+        else:
+            full_name = full_string
 
         # Test if search_name matches a word in string
         # Note: For AUTHORS this is a list of strings, for journals a string
@@ -292,6 +336,8 @@ class EraFixer(object):
 
             self.sheet_index = int(input("Sheet index: "))
             print("Pass --sheet_index={} to avoid this step".format(self.sheet_index))
+        elif not self.sheet_index:
+            self.sheet_index = 0
 
         self._print("Using sheet index {} - {}".format(self.sheet_index, self.xls.sheet_names[self.sheet_index]))
         self.df = self.xls.parse(self.xls.sheet_names[self.sheet_index])
