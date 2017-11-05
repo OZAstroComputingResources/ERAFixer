@@ -16,6 +16,7 @@ def main(ERAFILE,
          discipline=None,
          split_disciplines=False,
          prefix=None,
+         carry_forward_forcs=False,
          sheet_index=None,
          verbose=False,
          *args, **kwargs
@@ -29,8 +30,12 @@ def main(ERAFILE,
         erafixer.save()
     elif (journal and discipline):
         erafixer.set_discipline(discipline, journal, COL_LOOKUP['journal'])
-    elif (split_disciplines):
+        erafixer.save()
+    elif split_disciplines:
         erafixer.split_disciplines(prefix)
+    elif carry_forward_forcs:
+        erafixer.carry_forward_forcs()
+        erafixer.save()
 
 
 class EraFixer(object):
@@ -84,7 +89,18 @@ class EraFixer(object):
                 self.df.loc[list(matches.keys()), ('HANDLED')] = 1
 
     def split_disciplines(self, prefix):
+        """Output an excel file for each discipline with filename PREFIX_DISC.xlsx
+
+        Args:
+            prefix (str): Prefix for filename
+
+        Returns:
+            list(str): List of saved file names
+        """
         disc_list = self.df.DISCIPLINE.unique()
+
+        save_list = list()
+
         for disc in disc_list:
             if str(disc) in ['', 'nan']:
                 continue
@@ -92,6 +108,12 @@ class EraFixer(object):
             df = self.df.query('DISCIPLINE == "{}"'.format(disc))
             save_name = '{}_{}'.format(prefix, disc)
             self.save(df=df, save_name=save_name)
+            save_list.push(save_name)
+
+        return save_list
+
+    def carry_forward_forcs(self):
+        pass
 
     def get_matching_rows(self, search_term, column, blank_discipline=True):
         """Find rows that match the search_term for the given column
