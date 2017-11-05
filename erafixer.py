@@ -2,7 +2,7 @@
 
 import sys
 import pandas as pd
-import numpy as np
+import re
 
 PHYSASTRO = ['quantum', 'astro', 'photonics', 'biophotonics']
 COL_LOOKUP = {
@@ -28,6 +28,13 @@ COL_LOOKUP = {
 }
 
 
+forc_re = re.compile('''
+    (?P<code1>\d{2,4}):?(?P<code1_perc>\d{2})?,?
+    (?P<code2>\d{2,4})?:?(?P<code2_perc>\d{2})?,?
+    (?P<code3>\d{2,4})?:?(?P<code3_perc>\d{2})?,?
+''', re.X)
+
+
 def main(ERAFILE,
          author=None,
          journal=None,
@@ -35,6 +42,8 @@ def main(ERAFILE,
          split_disciplines=False,
          prefix=None,
          carry_forward_forcs=False,
+         forc_string=None,
+         justify_string=None,
          sheet_index=None,
          verbose=False,
          *args, **kwargs
@@ -53,6 +62,9 @@ def main(ERAFILE,
         erafixer.split_disciplines(prefix)
     elif carry_forward_forcs:
         erafixer.carry_forward_forcs()
+        erafixer.save()
+    elif forc_string:
+        erafixer.set_forc_string(forc_string, justify_string=justify_string, author=author, journal=journal)
         erafixer.save()
 
 
@@ -154,7 +166,33 @@ class EraFixer(object):
 
                 self.df.loc[condition, ('HANDLED')] = 1
 
-    def get_matching_rows(self, search_term, column, blank_discipline=True):
+    def set_forc_string(self, forc_string, justify_string=None, author=None, journal=None):
+        match = forc_re.match(forc_string)
+        if match is None:
+            self._print("FORC_STRING not valid")
+            return
+
+        self._print("Applying FORC_STRING '{}'".format(forc_string))
+        code1 = match.group('code1')
+        code1_perc = match.group('code1_perc')
+        code2 = match.group('code2')
+        code2_perc = match.group('code2_perc')
+        code3 = match.group('code3')
+        code3_perc = match.group('code3_perc')
+
+        # Get matching rows
+        if author:
+            matches = self.get_matching_rows(author, COL_LOOKUP['author'], skip_handled=True, blank_discipline=False)
+        elif journal:
+            matches = self.get_matching_rows(journal, COL_LOOKUP['journal'], skip_handled=True, blank_discipline=False)
+        else:
+            matches = self.get_matching_rows(0, 'HANDLED', skip_handled=True, blank_discipline=False)
+
+        # Get codes for 2018
+
+        return matches
+
+    def get_matching_rows(self, search_term, column, skip_handled=False, blank_discipline=True):
         """Find rows that match the search_term for the given column
 
         Args:
@@ -188,8 +226,15 @@ class EraFixer(object):
                 if self.df.iloc[match_index].DISCIPLINE == ''
             }
             self._print("Found {} matches for '{}' with empty discipline".format(len(row_match.keys()), search_term))
+        elif skip_handled:
+            row_match = {
+                match_index: row
+                for match_index, row in row_match.items()
+                if self.df.iloc[match_index].HANDLED == 0
+            }
+            self._print("Found {} matches for '{}' with HANDLED=0".format(len(row_match.keys()), search_term))
         else:
-            self._print("Found {} matches for '{}'".format(len(row_match.keys()), search_term))
+            self._print("Found {} matches for {}={}".format(len(row_match.keys()), column, search_term))
 
         return row_match
 
@@ -377,7 +422,7 @@ if __name__ == '__main__':
                         help='Apply the FORC string')
     parser.add_argument('--justify', dest='justify_string',
                         help='Justification string [optional for --set_forc]')
-    parser.add_argument('--sheet_index', default=None,
+    parser.add_argument('--sheet_index', default=None, type=int,
                         help="Excel sheet to use, defaults to first sheet")
     parser.add_argument('--verbose', action='store_true', default=False,
                         help="Show some output, default false")
@@ -401,11 +446,20 @@ if __name__ == '__main__':
         parser.error(
             "Splitting the file requires both --split_disciplines and a --prefix to be set")
 
-    if (args.justify_string and not args.set_forc):
+    if (args.justify_string and not args.forc_string):
         parser.error(
             "The justify string is only used with the --set_forc option")
 
-    if not ((args.author and args.discipline) or (args.split_disciplines and args.prefix) or args.carry_forward_forcs):
+    if args.forc_string:
+        match = forc_re.match(args.forc_string)
+        if match is None:
+            parser.error("FORC_STRING not valid")
+
+    if not ((args.author and args.discipline) or
+            (args.split_disciplines and args.prefix) or
+            args.carry_forward_forcs or
+            args.forc_string
+            ):
         parser.print_help()
         print("\nNo commands given")
         parser.exit()
