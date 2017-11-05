@@ -4,6 +4,10 @@ import sys
 import pandas as pd
 
 PHYSASTRO = ['quantum', 'astro', 'photonics', 'biophotonics']
+COL_LOOKUP = {
+    'author': 'AUTHORS',
+    'journal': 'PARENT_DOC',
+}
 
 
 def main(ERAFILE, author=None, journal=None, discipline=None, sheet_index=None, verbose=False, *args, **kwargs):
@@ -12,10 +16,10 @@ def main(ERAFILE, author=None, journal=None, discipline=None, sheet_index=None, 
     erafixer = EraFixer(fn=ERAFILE, sheet_index=sheet_index, verbose=verbose)
 
     if (author and discipline):
-        erafixer.set_discipline(discipline, author, 'AUTHORS')
+        erafixer.set_discipline(discipline, author, COL_LOOKUP['author'])
         erafixer.save()
     elif (journal and discipline):
-        erafixer.set_discipline(discipline, journal, 'PARENT_DOC')
+        erafixer.set_discipline(discipline, journal, COL_LOOKUP['journal'])
 
 
 class EraFixer(object):
@@ -35,9 +39,23 @@ class EraFixer(object):
         self.writer = pd.ExcelWriter(self.fn, engine='xlsxwriter')
 
     def set_author_discipline(self, search_term, disc):
+        """ Thin-wrapper around `set_discipline` with `column="AUTHORS"`search_term
+
+        See docstring for `set_discipline`
+         """
+        self.set_discipline(search_term, disc, COL_LOOKUP['author'])
+
+    def set_journal_discipline(self, search_term, disc):
+        """ Thin-wrapper around `set_discipline` with `column="PARENT_DOC"`search_term
+
+        See docstring for `set_discipline`
+         """
+        self.set_discipline(search_term, disc, COL_LOOKUP['journal'])
+
+    def set_discipline(self, search_term, disc, column):
         """Sets the discipline based on either the given author or journal
 
-        For each line, if search_term is a substring in AUTHOR and DISCIPLINE field is empty:
+        For each line, if search_term is a substring in AUTHOR|PARENT_DOC and DISCIPLINE field is empty:
             * set DISCIPLINE field to DISC
             * if DISC is not a PhysAstro discipline, set HANDLED=1
 
@@ -48,7 +66,7 @@ class EraFixer(object):
         """
         self._print("Setting discipline to '{}' for '{}'".format(disc, search_term))
 
-        matches = self.get_matching_rows(search_term, 'AUTHORS')
+        matches = self.get_matching_rows(search_term, column)
 
         if(len(matches) > 0):
             # Set the discipline on matched rows
@@ -58,11 +76,12 @@ class EraFixer(object):
                 self.df.loc[list(matches.keys()), ('HANDLED')] = 1
 
     def get_matching_rows(self, search_term, column, blank_discipline=True):
-        """ Find rows that match the search_term for the given column
+        """Find rows that match the search_term for the given column
 
         Args:
             search_term (str): Term to be matched, should be full last name or full word from journal
             column (str): Matching column name from spreadsheet
+            blank_discipline (bool, optional): Should matching rows have a blank discipline, default True
 
         Returns:
             dict: Dictionary with key values representing the matching indices from the DataFrame and
@@ -72,14 +91,14 @@ class EraFixer(object):
         match_indexes = [
             idx
             for idx, row in enumerate(self.df[column])
-            if search_term.lower().strip() in row.lower()
+            if search_term.lower().strip() in str(row).lower()
         ]
 
         # Get indexes of match_indexes - NOTE confusing index of indexes
         row_match = {
             match_indexes[idx]: row
             for idx, row in enumerate(self.df.iloc[match_indexes][column])
-            if self._match_name(row, search_term)
+            if self._match_name(row, search_term, column)
         }
 
         # Filter discipline
@@ -130,6 +149,27 @@ class EraFixer(object):
 
         return full_name
 
+    def get_journal_name(self, journal_name, search_term):
+        """ Returns full matching name in journal_name for search_term
+
+        Args:
+            journal_name (str): Full journal list string
+            search_term (str): Substring to be used to match full name
+
+        Returns:
+            TYPE: Description
+        """
+        journal_name = journal_name.lower().strip()
+        search_term = search_term.lower().strip()
+        full_name = ''
+
+        # Look for search_term in string
+        match_start = journal_name.find(search_term)
+        if(match_start >= 0):
+            full_name = journal_name
+
+        return full_name
+
     def save(self):
 
         # Write dataframe to file (all sheets)
@@ -144,8 +184,8 @@ class EraFixer(object):
         # Save the result
         self.writer.save()
 
-    def _match_name(self, author_list, search_name):
-        """ Check if search_name is in author_list
+    def _match_name(self, full_string, search_name, column):
+        """ Check if search_name is in full_string
 
         The search_term should be supplied as the full last name of the author in question.
 
@@ -154,22 +194,26 @@ class EraFixer(object):
             match on bad characters.
 
         Args:
-            author_list (str): Full author list string
+            full_string (str): Full author list string
             search_name (str): Substring to be used to match full name
 
         Returns:
             bool: If match found, default False
         """
-        author_list = author_list.lower().strip()
+        full_string = full_string.lower().strip()
         search_name = search_name.lower().strip()
         found = False
 
         # Get the name
-        full_name = self.get_full_name(author_list, search_name)
+        if column == COL_LOOKUP['author']:
+            full_name = self.get_full_name(full_string, search_name)
+            full_name = full_name.split()
+        elif column == COL_LOOKUP['journal']:
+            full_name = self.get_journal_name(full_string, search_name)
 
-        # Test if search_name matches a whole name word (i.e. is it the full last name?)
-        full_name_split = full_name.split()
-        found = search_name in full_name_split
+        # Test if search_name matches a word in string
+        # Note: For AUTHORS this is a list of strings, for journals a string
+        found = search_name in full_name
 
         return found
 
