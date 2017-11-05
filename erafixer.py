@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import os
 import sys
 import pandas as pd
 import re
@@ -72,6 +73,8 @@ class EraFixer(object):
     """ ERA Fixer class """
 
     def __init__(self, fn=None, sheet_index=None, verbose=False):
+        assert os.path.exists(fn)
+
         self.sheet_index = 0
         self.verbose = verbose
         self.fn = fn
@@ -167,18 +170,13 @@ class EraFixer(object):
                 self.df.loc[condition, ('HANDLED')] = 1
 
     def set_forc_string(self, forc_string, justify_string=None, author=None, journal=None):
-        match = forc_re.match(forc_string)
-        if match is None:
-            self._print("FORC_STRING not valid")
-            return
-
         self._print("Applying FORC_STRING '{}'".format(forc_string))
-        code1 = match.group('code1')
-        code1_perc = match.group('code1_perc')
-        code2 = match.group('code2')
-        code2_perc = match.group('code2_perc')
-        code3 = match.group('code3')
-        code3_perc = match.group('code3_perc')
+
+        try:
+            code1, code1_perc, code2, code2_perc, code3, code3_perc = self._parse_forc_string(forc_string)
+        except Exception as e:
+            self._print(e)
+            return
 
         # Get matching rows
         if author:
@@ -188,9 +186,116 @@ class EraFixer(object):
         else:
             matches = self.get_matching_rows(0, 'HANDLED', skip_handled=True, blank_discipline=False)
 
-        # Get codes for 2018
+        for idx, row in self.df.iloc[list(matches.keys())].iterrows():
+            default_code1 = str(row.loc[COL_LOOKUP['for1_e18']])
+            default_code2 = str(row.loc[COL_LOOKUP['for2_e18']])
+            default_code3 = str(row.loc[COL_LOOKUP['for3_e18']])
 
-        return matches
+            if(default_code1 == 'nan'):
+                default_code1 = ''
+            if(default_code2 == 'nan' or default_code2 == 'None'):
+                default_code2 = ''
+            if(default_code3 == 'nan' or default_code3 == 'None'):
+                default_code3 = ''
+
+            # If MD, apply codes
+            if ('MD' in default_code1) or ('MD' in default_code2) or ('MD' in default_code2):
+                self._print("Found 'MD', applying codes and marking HANDLED=1")
+                self.df.set_value(idx, COL_LOOKUP['for1_e18'], code1)
+                self.df.set_value(idx, COL_LOOKUP['for2_e18'], code2)
+                self.df.set_value(idx, COL_LOOKUP['for3_e18'], code3)
+                self.df.set_value(idx, COL_LOOKUP['for1perc_e18'], code1_perc)
+                self.df.set_value(idx, COL_LOOKUP['for2perc_e18'], code2_perc)
+                self.df.set_value(idx, COL_LOOKUP['for3perc_e18'], code3_perc)
+
+                # Mark handled
+                self.df.set_value(idx, 'HANDLED', 1)
+
+                # continue
+
+            # Correct some string/float ugliness and add prefix 0
+            if default_code1 > '' and not default_code1.startswith('0'):
+                default_code1 = ('0' + default_code1).replace('.0', '')
+            if default_code2 is not None and default_code2 > '' and not default_code2.startswith('0'):
+                default_code2 = ('0' + default_code2).replace('.0', '')
+            if default_code3 is not None and default_code3 > '' and not default_code3.startswith('0'):
+                default_code3 = ('0' + default_code3).replace('.0', '')
+
+            print(default_code1, default_code2, default_code3)
+
+            # If all the requested codes are present,
+            # or their 2 digit forms are present, (eg 0206 is fine if 02 is listed)
+            default_code1_present = default_code1 > ''
+            default_code2_present = default_code2 > ''
+            default_code3_present = default_code3 > ''
+
+            code1_present = code1 is not None and code1 > '' and code1.startswith(default_code1)
+            code2_present = code2 is not None and code2 > '' and code2.startswith(default_code2)
+            code3_present = code3 is not None and code3 > '' and code3.startswith(default_code3)
+
+            provided_codes = (code1_present, code2_present, code3_present)
+            default_codes = (default_code1_present, default_code2_present, default_code3_present)
+            print(provided_codes == default_codes)
+
+            if provided_codes == default_codes:
+                self._print("All codes present, applying FORC_STRING and marking HANDLED=1")
+                self.df.set_value(idx, COL_LOOKUP['for1_e18'], code1)
+                self.df.set_value(idx, COL_LOOKUP['for2_e18'], code2)
+                self.df.set_value(idx, COL_LOOKUP['for3_e18'], code3)
+                self.df.set_value(idx, COL_LOOKUP['for1perc_e18'], code1_perc)
+                self.df.set_value(idx, COL_LOOKUP['for2perc_e18'], code2_perc)
+                self.df.set_value(idx, COL_LOOKUP['for3perc_e18'], code3_perc)
+
+                # Mark handled
+                self.df.set_value(idx, 'HANDLED', 1)
+
+                continue
+            else:
+                # If some of the requested codes are not present
+                # (and not saved by MD or 2 digit codes)
+                # and --justify flag is not present
+                # set HANDLED=ClawbackNeeded
+                if justify_string is None:
+                    self._print("Not all codes present and not justify, marking HANDLED=ClawbackNeeded")
+                    # Mark ClawbackNeeded
+                    self.df.HANDLED = self.df.HANDLED.apply(str)
+                    self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
+                else:
+                    # One code, not present - have justify
+                    if ((code1_present and not default_code1_present) and not code2_present and not code3_present):
+                        print("One code given but not present, setting justify")
+                        # Assign code to FOR4 and set percent=100, clawback=justify, set HANDLED=1
+                        self.df.set_value(idx, COL_LOOKUP['for4_e18'], code1)
+                        self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], 100)
+                        self.df.set_value(idx, COL_LOOKUP['clawback'], justify_string)
+                        self.df.set_value(idx, 'HANDLED', 1)
+                        continue
+
+                    # Multiple codes, one not present - have justify
+                    if (code1_present and (code2_present or code3_present)):
+                        print("Multiple codes given but not present, setting justify")
+                        if (code2_present and not default_code2_present):
+                            if code2_perc > 66:
+                                self.df.set_value(idx, COL_LOOKUP['for4_e18'], code2)
+                                self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code2_perc)
+                                print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+                                self.df.set_value(idx, 'HANDLED', 1)
+                            else:
+                                print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
+                                self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
+
+                        if (code3_present and not default_code3_present):
+                            if code3_perc > 66:
+                                self.df.set_value(idx, COL_LOOKUP['for4_e18'], code3)
+                                self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code3_perc)
+                                print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+                                self.df.set_value(idx, 'HANDLED', 1)
+                            else:
+                                print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
+                                self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
+                        elif(code1_present and code2_present and code3_present):
+                            print("Multiple codes given but not present, setting HANDLED=confused")
+                            self.df.set_value(idx, 'HANDLED', 'confused')
 
     def get_matching_rows(self, search_term, column, skip_handled=False, blank_discipline=True):
         """Find rows that match the search_term for the given column
@@ -230,7 +335,7 @@ class EraFixer(object):
             row_match = {
                 match_index: row
                 for match_index, row in row_match.items()
-                if self.df.iloc[match_index].HANDLED == 0
+                if str(self.df.iloc[match_index].HANDLED) == '0'
             }
             self._print("Found {} matches for '{}' with HANDLED=0".format(len(row_match.keys()), search_term))
         else:
@@ -326,6 +431,51 @@ class EraFixer(object):
 
         return save_name
 
+    def _parse_forc_string(self, forc_string):
+        match = forc_re.match(forc_string)
+        if match is None:
+            raise Exception("FORC_STRING not valid")
+
+        match = forc_re.match(forc_string)
+        code1 = match.group('code1')
+        code1_perc = match.group('code1_perc')
+        code2 = match.group('code2')
+        code2_perc = match.group('code2_perc')
+        code3 = match.group('code3')
+        code3_perc = match.group('code3_perc')
+
+        if code1_perc is not None:
+            code1_perc = float(code1_perc)
+        else:
+            code1_perc = 0
+
+        if code2_perc is not None:
+            code2_perc = float(code2_perc)
+        else:
+            code2_perc = 0
+
+        if code3_perc is not None:
+            code3_perc = float(code3_perc)
+        else:
+            code3_perc = 0
+
+        if (code1_perc == 0 and code2_perc == 0 and code3_perc == 0):
+            code1_perc = 100.
+            code2_perc = 0.
+            code3_perc = 0.
+
+        if code1_perc < 100:
+            if (code2_perc == 0 and code3 is None):
+                code2_perc = 100 - code1_perc
+
+            if (code1_perc + code2_perc < 100 and code3_perc == 0):
+                code3_perc = 100 - code1_perc - code2_perc
+
+        if (code1_perc + code2_perc + code3_perc != 100):
+            raise Exception("Percentages don't add to 100")
+
+        return (code1, code1_perc, code2, code2_perc, code3, code3_perc,)
+
     def _match_name(self, full_string, search_name, column):
         """ Check if search_name is in full_string
 
@@ -369,7 +519,7 @@ class EraFixer(object):
         """
         self._print("Parsing file {}".format(self.fn))
         try:
-            self.xls = pd.ExcelFile(self.fn)
+            self.xls = pd.ExcelFile(self.fn, dtype=object)
         except Exception:
             print("Can't find excel file: {}".format(self.fn))
             sys.exit(1)
@@ -429,6 +579,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    if not os.path.exists(args.ERAFILE):
+        parser.error("File does not exist")
+
     # Do some argument checking
     if (args.author and not args.discipline):
         parser.error(
@@ -456,6 +609,7 @@ if __name__ == '__main__':
             parser.error("FORC_STRING not valid")
 
     if not ((args.author and args.discipline) or
+            (args.journal and args.discipline) or
             (args.split_disciplines and args.prefix) or
             args.carry_forward_forcs or
             args.forc_string
