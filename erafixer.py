@@ -10,7 +10,16 @@ COL_LOOKUP = {
 }
 
 
-def main(ERAFILE, author=None, journal=None, discipline=None, sheet_index=None, verbose=False, *args, **kwargs):
+def main(ERAFILE,
+         author=None,
+         journal=None,
+         discipline=None,
+         split_disciplines=False,
+         prefix=None,
+         sheet_index=None,
+         verbose=False,
+         *args, **kwargs
+         ):
     """ Creates a EraFixer object and decides which method to call based on input params """
 
     erafixer = EraFixer(fn=ERAFILE, sheet_index=sheet_index, verbose=verbose)
@@ -20,6 +29,8 @@ def main(ERAFILE, author=None, journal=None, discipline=None, sheet_index=None, 
         erafixer.save()
     elif (journal and discipline):
         erafixer.set_discipline(discipline, journal, COL_LOOKUP['journal'])
+    elif (split_disciplines):
+        erafixer.split_disciplines(prefix)
 
 
 class EraFixer(object):
@@ -34,9 +45,6 @@ class EraFixer(object):
         self.sheet_index = sheet_index
 
         self._parse_excel()
-
-        # Specify a writer for saving
-        self.writer = pd.ExcelWriter(self.fn, engine='xlsxwriter')
 
     def set_author_discipline(self, search_term, disc):
         """ Thin-wrapper around `set_discipline` with `column="AUTHORS"`search_term
@@ -74,6 +82,16 @@ class EraFixer(object):
             if disc not in PHYSASTRO:
                 self._print("'{}' not in PhysAstro, setting HANDLED=1".format(disc))
                 self.df.loc[list(matches.keys()), ('HANDLED')] = 1
+
+    def split_disciplines(self, prefix):
+        disc_list = self.df.DISCIPLINE.unique()
+        for disc in disc_list:
+            if str(disc) in ['', 'nan']:
+                continue
+
+            df = self.df.query('DISCIPLINE == "{}"'.format(disc))
+            save_name = '{}_{}'.format(prefix, disc)
+            self.save(df=df, save_name=save_name)
 
     def get_matching_rows(self, search_term, column, blank_discipline=True):
         """Find rows that match the search_term for the given column
@@ -170,19 +188,34 @@ class EraFixer(object):
 
         return full_name
 
-    def save(self):
+    def save(self, df=None, save_name=None):
 
-        # Write dataframe to file (all sheets)
-        for sheet in self.xls.sheet_names:
-            self._print("Writing sheet '{}' to {}".format(sheet, self.fn))
-
-            if sheet == self.xls.sheet_names[self.sheet_index]:
-                self.df.to_excel(self.writer, sheet)
+        if df is not None:
+            if not save_name:
+                print("Can't save a DataFrame without a save_name")
             else:
-                self.xls.parse(sheet).to_excel(self.writer, sheet)
+                if not save_name.endswith('.xlsx'):
+                    save_name += '.xlsx'
 
-        # Save the result
-        self.writer.save()
+                self._print("Writing dataframe to {} with {} records".format(save_name, len(df)))
+                writer = pd.ExcelWriter(save_name, engine='xlsxwriter')
+                df.to_excel(writer)
+                writer.save()
+        else:
+            # Specify a writer for saving
+            writer = pd.ExcelWriter(self.fn, engine='xlsxwriter')
+
+            # Write dataframe to file (all sheets)
+            for sheet in self.xls.sheet_names:
+                self._print("Writing sheet '{}' to {}".format(sheet, self.fn))
+
+                if sheet == self.xls.sheet_names[self.sheet_index]:
+                    self.df.to_excel(writer, sheet)
+                else:
+                    self.xls.parse(sheet).to_excel(writer, sheet)
+
+            # Save the result
+            writer.save()
 
     def _match_name(self, full_string, search_name, column):
         """ Check if search_name is in full_string
