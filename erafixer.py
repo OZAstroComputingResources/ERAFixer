@@ -54,10 +54,10 @@ def main(ERAFILE,
     erafixer = EraFixer(fn=ERAFILE, sheet_index=sheet_index, verbose=verbose)
 
     if (author and discipline):
-        erafixer.set_discipline(discipline, author, COL_LOOKUP['author'])
+        erafixer.set_author_discipline(author, discipline)
         erafixer.save()
     elif (journal and discipline):
-        erafixer.set_discipline(discipline, journal, COL_LOOKUP['journal'])
+        erafixer.set_journal_discipline(journal, discipline)
         erafixer.save()
     elif split_disciplines:
         erafixer.split_disciplines(prefix)
@@ -221,8 +221,6 @@ class EraFixer(object):
             if default_code3 is not None and default_code3 > '' and not default_code3.startswith('0'):
                 default_code3 = ('0' + default_code3).replace('.0', '')
 
-            print(default_code1, default_code2, default_code3)
-
             # If all the requested codes are present,
             # or their 2 digit forms are present, (eg 0206 is fine if 02 is listed)
             default_code1_present = default_code1 > ''
@@ -235,8 +233,9 @@ class EraFixer(object):
 
             provided_codes = (code1_present, code2_present, code3_present)
             default_codes = (default_code1_present, default_code2_present, default_code3_present)
-            print(provided_codes == default_codes)
-
+            print(provided_codes)
+            print(default_codes)
+            print()
             if provided_codes == default_codes:
                 self._print("All codes present, applying FORC_STRING and marking HANDLED=1")
                 self.df.set_value(idx, COL_LOOKUP['for1_e18'], code1)
@@ -248,8 +247,6 @@ class EraFixer(object):
 
                 # Mark handled
                 self.df.set_value(idx, 'HANDLED', 1)
-
-                continue
             else:
                 # If some of the requested codes are not present
                 # (and not saved by MD or 2 digit codes)
@@ -263,7 +260,7 @@ class EraFixer(object):
                 else:
                     # One code, not present - have justify
                     if ((code1_present and not default_code1_present) and not code2_present and not code3_present):
-                        print("One code given but not present, setting justify")
+                        self._print("One code given but not present, setting justify")
                         # Assign code to FOR4 and set percent=100, clawback=justify, set HANDLED=1
                         self.df.set_value(idx, COL_LOOKUP['for4_e18'], code1)
                         self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], 100)
@@ -273,28 +270,28 @@ class EraFixer(object):
 
                     # Multiple codes, one not present - have justify
                     if (code1_present and (code2_present or code3_present)):
-                        print("Multiple codes given but not present, setting justify")
+                        self._print("Multiple codes given but not present, setting justify")
                         if (code2_present and not default_code2_present):
                             if code2_perc > 66:
                                 self.df.set_value(idx, COL_LOOKUP['for4_e18'], code2)
                                 self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code2_perc)
-                                print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+                                self._print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
                                 self.df.set_value(idx, 'HANDLED', 1)
                             else:
-                                print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
+                                self._print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
                                 self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
 
                         if (code3_present and not default_code3_present):
                             if code3_perc > 66:
                                 self.df.set_value(idx, COL_LOOKUP['for4_e18'], code3)
                                 self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code3_perc)
-                                print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+                                self._print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
                                 self.df.set_value(idx, 'HANDLED', 1)
                             else:
-                                print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
+                                self._print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
                                 self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
                         elif(code1_present and code2_present and code3_present):
-                            print("Multiple codes given but not present, setting HANDLED=confused")
+                            self._print("Multiple codes given but not present, setting HANDLED=confused")
                             self.df.set_value(idx, 'HANDLED', 'confused')
 
     def get_matching_rows(self, search_term, column, skip_handled=False, blank_discipline=True):
@@ -328,7 +325,7 @@ class EraFixer(object):
             row_match = {
                 match_index: row
                 for match_index, row in row_match.items()
-                if self.df.iloc[match_index].DISCIPLINE == ''
+                if str(self.df.iloc[match_index].DISCIPLINE) == 'nan'
             }
             self._print("Found {} matches for '{}' with empty discipline".format(len(row_match.keys()), search_term))
         elif skip_handled:
@@ -583,11 +580,11 @@ if __name__ == '__main__':
         parser.error("File does not exist")
 
     # Do some argument checking
-    if (args.author and not args.discipline):
+    if ((args.author and not args.forc_string) and not args.discipline):
         parser.error(
             "Setting an author discipline requires both --detect_author and -set_discipline to be set")
 
-    if (args.journal and not args.discipline):
+    if ((args.journal and not args.forc_string) and not args.discipline):
         parser.error(
             "Setting a journal discipline requires both --detect_author and -set_discipline to be set")
 
