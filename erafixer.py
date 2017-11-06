@@ -2,6 +2,7 @@
 
 import os
 import sys
+import numpy as np
 import pandas as pd
 import re
 
@@ -85,14 +86,14 @@ class EraFixer(object):
         self._parse_excel()
 
     def set_author_discipline(self, search_term, disc):
-        """ Thin-wrapper around `set_discipline` with `column="AUTHORS"`search_term
+        """ Thin-wrapper around `set_discipline` with author column name
 
         See docstring for `set_discipline`
          """
         self.set_discipline(search_term, disc, COL_LOOKUP['author'])
 
     def set_journal_discipline(self, search_term, disc):
-        """ Thin-wrapper around `set_discipline` with `column="PARENT_DOC"`search_term
+        """ Thin-wrapper around `set_discipline` with journal column name
 
         See docstring for `set_discipline`
          """
@@ -112,14 +113,13 @@ class EraFixer(object):
         """
         self._print("Setting discipline to '{}' for '{}'".format(disc, search_term))
 
-        matches = self.get_matching_rows(search_term, column)
+        matching_indices = self.get_matching_rows(search_term, column)
 
-        if(len(matches) > 0):
-            # Set the discipline on matched rows
-            self.df.loc[list(matches.keys()), ('DISCIPLINE')] = disc
-            if disc not in PHYSASTRO:
-                self._print("'{}' not in PhysAstro, setting HANDLED=1".format(disc))
-                self.df.loc[list(matches.keys()), ('HANDLED')] = 1
+        # Set the discipline on matched rows
+        self.df.loc[matching_indices, ('DISCIPLINE')] = disc
+        if disc not in PHYSASTRO:
+            self._print("'{}' not in PhysAstro, setting HANDLED=1".format(disc))
+            self.df.loc[matching_indices, ('HANDLED')] = 1
 
     def split_disciplines(self, prefix):
         """Output an excel file for each discipline with filename PREFIX_DISC.xlsx
@@ -156,6 +156,7 @@ class EraFixer(object):
 
             not_handled = self.df.HANDLED == 0
             for col_2015 in COL_LOOKUP.keys():
+                # Only looking at _e15 FOR code columns
                 if 'e15' not in col_2015:
                     continue
 
@@ -211,7 +212,7 @@ class EraFixer(object):
                 # Mark handled
                 self.df.set_value(idx, 'HANDLED', 1)
 
-                # continue
+                continue
 
             # Correct some string/float ugliness and add prefix 0
             if default_code1 > '' and not default_code1.startswith('0'):
@@ -233,9 +234,7 @@ class EraFixer(object):
 
             provided_codes = (code1_present, code2_present, code3_present)
             default_codes = (default_code1_present, default_code2_present, default_code3_present)
-            print(provided_codes)
-            print(default_codes)
-            print()
+
             if provided_codes == default_codes:
                 self._print("All codes present, applying FORC_STRING and marking HANDLED=1")
                 self.df.set_value(idx, COL_LOOKUP['for1_e18'], code1)
@@ -294,8 +293,13 @@ class EraFixer(object):
                             self._print("Multiple codes given but not present, setting HANDLED=confused")
                             self.df.set_value(idx, 'HANDLED', 'confused')
 
+
+################################################################################
+# Helper methods
+################################################################################
+
     def get_matching_rows(self, search_term, column, skip_handled=False, blank_discipline=True):
-        """Find rows that match the search_term for the given column
+        """Find rows that match the search_term for the given column and return indices
 
         Args:
             search_term (str): Term to be matched, should be full last name or full word from journal
@@ -303,42 +307,35 @@ class EraFixer(object):
             blank_discipline (bool, optional): Should matching rows have a blank discipline, default True
 
         Returns:
-            dict: Dictionary with key values representing the matching indices from the DataFrame and
-                values corresponding to the matched column
+            list: List of matching indices
         """
         # Get rows that have a naive match
-        match_indexes = [
+        naive_matches = [
             idx
             for idx, row in enumerate(self.df[column])
             if str(search_term).lower().strip() in str(row).lower()
         ]
 
-        # Get indexes of match_indexes - NOTE confusing index of indexes
-        row_match = {
-            match_indexes[idx]: row
-            for idx, row in enumerate(self.df.iloc[match_indexes][column])
-            if self._match_name(row, search_term, column)
-        }
+        # Do a more specific match, e.g. 'Gee' should not match 'McGee'
+        exact_matches = list()
+        for idx, row in self.df.loc[naive_matches].iterrows():
+            if self._match_name(row, search_term, column):
+                exact_matches.append(idx)
+
+        # Skip handled
+        if skip_handled:
+            exact_matches = list(self.df.loc[exact_matches].query("HANDLED == 0").index)
+            self._print("Found {} matches for '{}' with HANDLED=0".format(len(exact_matches), search_term))
 
         # Filter discipline
         if blank_discipline:
-            row_match = {
-                match_index: row
-                for match_index, row in row_match.items()
-                if str(self.df.iloc[match_index].DISCIPLINE) == 'nan'
-            }
-            self._print("Found {} matches for '{}' with empty discipline".format(len(row_match.keys()), search_term))
-        elif skip_handled:
-            row_match = {
-                match_index: row
-                for match_index, row in row_match.items()
-                if str(self.df.iloc[match_index].HANDLED) == '0'
-            }
-            self._print("Found {} matches for '{}' with HANDLED=0".format(len(row_match.keys()), search_term))
-        else:
-            self._print("Found {} matches for {}={}".format(len(row_match.keys()), column, search_term))
+            exact_matches = list(self.df.loc[exact_matches][pd.isnull(
+                self.df.loc[exact_matches, 'DISCIPLINE'])].index)
+            self._print("Found {} matches for '{}' with empty discipline".format(len(exact_matches), search_term))
 
-        return row_match
+        self._print("Found {} total rows for {}={}".format(len(exact_matches), column, search_term))
+
+        return exact_matches
 
     def get_full_name(self, author_list, search_term):
         """ Returns full matching name in author_list for search_term
@@ -427,6 +424,10 @@ class EraFixer(object):
             writer.save()
 
         return save_name
+
+################################################################################
+# Private methods
+################################################################################
 
     def _parse_forc_string(self, forc_string):
         match = forc_re.match(forc_string)
@@ -539,8 +540,8 @@ class EraFixer(object):
             self.df['HANDLED'] = 0
 
         if 'DISCIPLINE' not in self.df.columns:
-            self._print("Adding DISCIPLINE (default '') column to spreadsheet")
-            self.df['DISCIPLINE'] = ''
+            self._print("Adding DISCIPLINE (default NaN) column to spreadsheet")
+            self.df['DISCIPLINE'] = np.nan
 
     def _print(self, msg):
         """ Simple wrapper to check verbose flag """
