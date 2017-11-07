@@ -148,27 +148,30 @@ class EraFixer(object):
         """ For each line, if there are values for 2015 FOR codes and HANDLED
 
         """
+        self._print("Copying 2015 FOR codes to 2018 for unhandled rows")
+
         # Find rows that are not handled yet
-        matches = self.get_matching_rows(0, 'HANDLED', blank_discipline=False)
+        matching_indices = self.get_matching_rows(0, 'HANDLED', blank_discipline=False)
+        self._print("Found {} total unhandled rows".format(len(matching_indices)))
 
-        if(len(matches) > 0):
-            self._print("Copying 2015 FOR codes to 2018 for unhandled rows")
+        for col_2015 in COL_LOOKUP.keys():
+            # Only looking at _e15 FOR code columns
+            if 'e15' not in col_2015:
+                continue
 
-            not_handled = self.df.HANDLED == 0
-            for col_2015 in COL_LOOKUP.keys():
-                # Only looking at _e15 FOR code columns
-                if 'e15' not in col_2015:
-                    continue
+            col_2018 = col_2015.replace('e15', 'e18')
 
-                col_2018 = col_2015.replace('e15', 'e18')
+            # Find 2015 columns that do not have blank values
+            has_2015_mask = pd.notnull(self.df.loc[matching_indices, (COL_LOOKUP[col_2015])])
 
-                col_has_values = self.df.loc[not_handled, (COL_LOOKUP[col_2015])].apply(str) != 'nan'
-                condition = col_has_values[col_has_values].index
+            self._print("Moving {} values to {}".format(has_2015_mask.sum(), col_2018))
 
-                self.df.loc[condition, (COL_LOOKUP[col_2018])] = \
-                    self.df.loc[condition, (COL_LOOKUP[col_2015])]
+            # Copy to 2018 columns
+            self.df.loc[has_2015_mask, (COL_LOOKUP[col_2018])] = \
+                self.df.loc[has_2015_mask, (COL_LOOKUP[col_2015])]
 
-                self.df.loc[condition, ('HANDLED')] = 1
+            # Mark row as handled
+            self.df.loc[has_2015_mask, ('HANDLED')] = 1
 
     def set_forc_string(self, forc_string, justify_string=None, author=None, journal=None):
         self._print("Applying FORC_STRING '{}'".format(forc_string))
@@ -181,13 +184,15 @@ class EraFixer(object):
 
         # Get matching rows
         if author:
-            matches = self.get_matching_rows(author, COL_LOOKUP['author'], skip_handled=True, blank_discipline=False)
+            matching_indices = self.get_matching_rows(
+                author, COL_LOOKUP['author'], skip_handled=True, blank_discipline=False)
         elif journal:
-            matches = self.get_matching_rows(journal, COL_LOOKUP['journal'], skip_handled=True, blank_discipline=False)
+            matching_indices = self.get_matching_rows(
+                journal, COL_LOOKUP['journal'], skip_handled=True, blank_discipline=False)
         else:
-            matches = self.get_matching_rows(0, 'HANDLED', skip_handled=True, blank_discipline=False)
+            matching_indices = self.get_matching_rows(0, 'HANDLED', skip_handled=True, blank_discipline=False)
 
-        for idx, row in self.df.iloc[list(matches.keys())].iterrows():
+        for idx, row in self.df.loc[matching_indices].iterrows():
             default_code1 = str(row.loc[COL_LOOKUP['for1_e18']])
             default_code2 = str(row.loc[COL_LOOKUP['for2_e18']])
             default_code3 = str(row.loc[COL_LOOKUP['for3_e18']])
@@ -309,31 +314,38 @@ class EraFixer(object):
         Returns:
             list: List of matching indices
         """
+        self._print("Matching {}={}".format(column, search_term))
         # Get rows that have a naive match
         naive_matches = [
             idx
-            for idx, row in enumerate(self.df[column])
-            if str(search_term).lower().strip() in str(row).lower()
+            for idx, row in self.df.iterrows()
+            if str(search_term).lower().strip() in str(row[column]).lower()
         ]
+        self._print("Found {} naive matches for {}={}".format(len(naive_matches), column, search_term))
 
-        # Do a more specific match, e.g. 'Gee' should not match 'McGee'
-        exact_matches = list()
-        for idx, row in self.df.loc[naive_matches].iterrows():
-            if self._match_name(row, search_term, column):
-                exact_matches.append(idx)
+        if column in COL_LOOKUP.values():
+            # Do a more specific match, e.g. 'Gee' should not match 'McGee' for author
+            exact_matches = list()
+            for idx, row in self.df.loc[naive_matches].iterrows():
+                if self._match_name(row[column], search_term, column):
+                    exact_matches.append(idx)
 
-        # Skip handled
-        if skip_handled:
-            exact_matches = list(self.df.loc[exact_matches].query("HANDLED == 0").index)
-            self._print("Found {} matches for '{}' with HANDLED=0".format(len(exact_matches), search_term))
+            self._print("Found {} exact matches for '{}'".format(len(exact_matches), search_term))
 
-        # Filter discipline
-        if blank_discipline:
-            exact_matches = list(self.df.loc[exact_matches][pd.isnull(
-                self.df.loc[exact_matches, 'DISCIPLINE'])].index)
-            self._print("Found {} matches for '{}' with empty discipline".format(len(exact_matches), search_term))
+            # Skip handled
+            if skip_handled:
+                exact_matches = list(self.df.loc[exact_matches].query("HANDLED == 0").index)
+                self._print("Found {} matches for '{}' with HANDLED=0".format(len(exact_matches), search_term))
 
-        self._print("Found {} total rows for {}={}".format(len(exact_matches), column, search_term))
+            # Filter discipline
+            if blank_discipline:
+                exact_matches = list(self.df.loc[exact_matches][pd.isnull(
+                    self.df.loc[exact_matches, 'DISCIPLINE'])].index)
+                self._print("Found {} matches for '{}' with empty discipline".format(len(exact_matches), search_term))
+
+            self._print("Found {} total rows for {}={}".format(len(exact_matches), column, search_term))
+        else:
+            exact_matches = naive_matches
 
         return exact_matches
 
