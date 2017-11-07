@@ -48,11 +48,12 @@ def main(ERAFILE,
          justify_string=None,
          sheet_index=None,
          verbose=False,
+         debug=False,
          *args, **kwargs
          ):
     """ Creates a EraFixer object and decides which method to call based on input params """
 
-    erafixer = EraFixer(fn=ERAFILE, sheet_index=sheet_index, verbose=verbose)
+    erafixer = EraFixer(fn=ERAFILE, sheet_index=sheet_index, verbose=verbose, debug=debug)
 
     if (author and discipline):
         erafixer.set_author_discipline(author, discipline)
@@ -73,11 +74,12 @@ def main(ERAFILE,
 class EraFixer(object):
     """ ERA Fixer class """
 
-    def __init__(self, fn=None, sheet_index=None, verbose=False):
+    def __init__(self, fn=None, sheet_index=None, verbose=False, debug=False):
         assert os.path.exists(fn)
+        self.verbose = verbose
+        self.debug = debug
 
         self.sheet_index = 0
-        self.verbose = verbose
         self.fn = fn
         self.xls = None
         self.df = None
@@ -111,11 +113,11 @@ class EraFixer(object):
             disc (str): Discipline to be set
 
         """
-        self._print("Setting discipline to '{}' for '{}'".format(disc, search_term))
 
         matching_indices = self.get_matching_rows(search_term, column)
 
         # Set the discipline on matched rows
+        self._print("Setting discipline to '{}' for '{}' on {} rows".format(disc, search_term, len(matching_indices)))
         self.df.loc[matching_indices, ('DISCIPLINE')] = disc
         if disc not in PHYSASTRO:
             self._print("'{}' not in PhysAstro, setting HANDLED=1".format(disc))
@@ -206,7 +208,7 @@ class EraFixer(object):
 
             # If MD, apply codes
             if ('MD' in default_code1) or ('MD' in default_code2) or ('MD' in default_code2):
-                self._print("Found 'MD', applying codes and marking HANDLED=1")
+                self._debug("Found 'MD', applying codes and marking HANDLED=1")
                 self.df.set_value(idx, COL_LOOKUP['for1_e18'], code1)
                 self.df.set_value(idx, COL_LOOKUP['for2_e18'], code2)
                 self.df.set_value(idx, COL_LOOKUP['for3_e18'], code3)
@@ -241,7 +243,7 @@ class EraFixer(object):
             default_codes = (default_code1_present, default_code2_present, default_code3_present)
 
             if provided_codes == default_codes:
-                self._print("All codes present, applying FORC_STRING and marking HANDLED=1")
+                self._debug("All codes present, applying FORC_STRING and marking HANDLED=1")
                 self.df.set_value(idx, COL_LOOKUP['for1_e18'], code1)
                 self.df.set_value(idx, COL_LOOKUP['for2_e18'], code2)
                 self.df.set_value(idx, COL_LOOKUP['for3_e18'], code3)
@@ -255,16 +257,29 @@ class EraFixer(object):
                 # If some of the requested codes are not present
                 # (and not saved by MD or 2 digit codes)
                 # and --justify flag is not present
-                # set HANDLED=ClawbackNeeded
+                # set HANDLED=99
                 if justify_string is None:
-                    self._print("Not all codes present and not justify, marking HANDLED=ClawbackNeeded")
+                    self._debug("Not all codes present and not justify, marking HANDLED=99")
                     # Mark ClawbackNeeded
                     self.df.HANDLED = self.df.HANDLED.apply(str)
-                    self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
+                    self.df.set_value(idx, 'HANDLED', 99)
                 else:
+                    missing_code_1 = (default_code1_present and not code1_present)
+                    missing_code_2 = (default_code2_present and not code2_present)
+                    missing_code_3 = (default_code3_present and not code3_present)
+
+                    if missing_code_1:
+                        self._debug("Missing code 1, Default: {} \t Provided: {}".format(default_code1, code1))
+
+                    if missing_code_2:
+                        self._debug("Missing code 2, Default: {} \t Provided: {}".format(default_code2, code2))
+
+                    if missing_code_3:
+                        self._debug("Missing code 3, Default: {} \t Provided: {}".format(default_code3, code3))
+
                     # One code, not present - have justify
-                    if ((code1_present and not default_code1_present) and not code2_present and not code3_present):
-                        self._print("One code given but not present, setting justify")
+                    if (missing_code_1 and not code2_present and not code3_present):
+                        self._debug("One code given but not present, setting justify")
                         # Assign code to FOR4 and set percent=100, clawback=justify, set HANDLED=1
                         self.df.set_value(idx, COL_LOOKUP['for4_e18'], code1)
                         self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], 100)
@@ -273,30 +288,32 @@ class EraFixer(object):
                         continue
 
                     # Multiple codes, one not present - have justify
-                    if (code1_present and (code2_present or code3_present)):
-                        self._print("Multiple codes given but not present, setting justify")
-                        if (code2_present and not default_code2_present):
+                    if (code1_present and (missing_code_2 or missing_code_3)):
+                        self._debug("Multiple codes given but not present, setting justify")
+                        if missing_code_2:
                             if code2_perc > 66:
                                 self.df.set_value(idx, COL_LOOKUP['for4_e18'], code2)
                                 self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code2_perc)
-                                self._print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+                                self._debug("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
                                 self.df.set_value(idx, 'HANDLED', 1)
                             else:
-                                self._print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
-                                self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
+                                self._debug("Missing code is less than 66%, setting HANDLED=99")
+                                self.df.set_value(idx, 'HANDLED', 99)
 
-                        if (code3_present and not default_code3_present):
+                        if missing_code_3:
                             if code3_perc > 66:
                                 self.df.set_value(idx, COL_LOOKUP['for4_e18'], code3)
                                 self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code3_perc)
-                                self._print("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+                                self._debug("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
                                 self.df.set_value(idx, 'HANDLED', 1)
                             else:
-                                self._print("Missing code is less than 66%, setting HANDLED=ClawbackNeeded")
-                                self.df.set_value(idx, 'HANDLED', 'ClawbackNeeded')
+                                self._debug("Missing code is less than 66%, setting HANDLED=99 (ClawbackNeeded)")
+                                self.df.set_value(idx, 'HANDLED', 99)
                         elif(code1_present and code2_present and code3_present):
-                            self._print("Multiple codes given but not present, setting HANDLED=confused")
-                            self.df.set_value(idx, 'HANDLED', 'confused')
+                            self._debug("Multiple codes given but not present, setting HANDLED=-1 (confused)")
+                            self.df.set_value(idx, 'HANDLED', -1)
+                    else:
+                        print("I shouldn't be here")
 
 
 ################################################################################
@@ -314,14 +331,14 @@ class EraFixer(object):
         Returns:
             list: List of matching indices
         """
-        self._print("Matching {}={}".format(column, search_term))
+        self._debug("Matching {}={}".format(column, search_term))
         # Get rows that have a naive match
         naive_matches = [
             idx
             for idx, row in self.df.iterrows()
             if str(search_term).lower().strip() in str(row[column]).lower()
         ]
-        self._print("Found {} naive matches for {}={}".format(len(naive_matches), column, search_term))
+        self._debug("Found {} naive matches for {}={}".format(len(naive_matches), column, search_term))
 
         if column in COL_LOOKUP.values():
             # Do a more specific match, e.g. 'Gee' should not match 'McGee' for author
@@ -330,20 +347,20 @@ class EraFixer(object):
                 if self._match_name(row[column], search_term, column):
                     exact_matches.append(idx)
 
-            self._print("Found {} exact matches for '{}'".format(len(exact_matches), search_term))
+            self._debug("Found {} exact matches for '{}'".format(len(exact_matches), search_term))
 
             # Skip handled
             if skip_handled:
                 exact_matches = list(self.df.loc[exact_matches].query("HANDLED == 0").index)
-                self._print("Found {} matches for '{}' with HANDLED=0".format(len(exact_matches), search_term))
+                self._debug("Found {} matches for '{}' with HANDLED=0".format(len(exact_matches), search_term))
 
             # Filter discipline
             if blank_discipline:
                 exact_matches = list(self.df.loc[exact_matches][pd.isnull(
                     self.df.loc[exact_matches, 'DISCIPLINE'])].index)
-                self._print("Found {} matches for '{}' with empty discipline".format(len(exact_matches), search_term))
+                self._debug("Found {} matches for '{}' with empty discipline".format(len(exact_matches), search_term))
 
-            self._print("Found {} total rows for {}={}".format(len(exact_matches), column, search_term))
+            self._debug("Found {} total rows for {}={}".format(len(exact_matches), column, search_term))
         else:
             exact_matches = naive_matches
 
@@ -414,7 +431,7 @@ class EraFixer(object):
                 if not save_name.endswith('.xlsx'):
                     save_name += '.xlsx'
 
-                self._print("Writing dataframe to {} with {} records".format(save_name, len(df)))
+                self._debug("Writing dataframe to {} with {} records".format(save_name, len(df)))
                 writer = pd.ExcelWriter(save_name, engine='xlsxwriter')
                 df.to_excel(writer)
                 writer.save()
@@ -425,7 +442,7 @@ class EraFixer(object):
 
             # Write dataframe to file (all sheets)
             for sheet in self.xls.sheet_names:
-                self._print("Writing sheet '{}' to {}".format(sheet, save_name))
+                self._debug("Writing sheet '{}' to {}".format(sheet, save_name))
 
                 if sheet == self.xls.sheet_names[self.sheet_index]:
                     self.df.to_excel(writer, sheet)
@@ -435,6 +452,7 @@ class EraFixer(object):
             # Save the result
             writer.save()
 
+        self._print("File saved: {}".format(save_name))
         return save_name
 
 ################################################################################
@@ -548,16 +566,50 @@ class EraFixer(object):
         self.df = self.xls.parse(self.xls.sheet_names[self.sheet_index])
 
         if 'HANDLED' not in self.df.columns:
-            self._print("Adding HANDLED (default 0) column to spreadsheet")
+            self._debug("Adding HANDLED (default 0) column to spreadsheet")
             self.df['HANDLED'] = 0
 
         if 'DISCIPLINE' not in self.df.columns:
-            self._print("Adding DISCIPLINE (default NaN) column to spreadsheet")
+            self._debug("Adding DISCIPLINE (default NaN) column to spreadsheet")
             self.df['DISCIPLINE'] = np.nan
+
+        # Clean some dtypes
+        dtypes = {
+            'ERA_18_FOR4_ClawBack_Justify': 'object',
+            'ARCFORC': 'object',
+            'Staff_Comments': 'object',
+            'Category': 'object',
+            'ARIS_UPDATED': 'object',
+            'YEAR': 'int64',
+            'DEPARTMENT': 'object',
+            'First_MQ_Authors_Faculty': 'object',
+            'AUTHORS': 'object',
+            'TITLE': 'object',
+            'PUBLISHER': 'object',
+            'PARENT_DOC': 'object',
+            'EDITOR': 'object',
+            'VOL': 'object',
+            'NUMB': 'object',
+            'EDITION': 'object',
+            'START_PAGE': 'object',
+            'END_PAGE': 'object',
+            'PLACE': 'object',
+            'ISSBN': 'object',
+            'DOI': 'object',
+            'HANDLED': 'object',
+            'DISCIPLINE': 'object',
+        }
+        for col, col_type in dtypes.items():
+            self.df[col] = self.df[col].astype(col_type)
 
     def _print(self, msg):
         """ Simple wrapper to check verbose flag """
         if self.verbose:
+            print(msg)
+
+    def _debug(self, msg):
+        """ Simple wrapper to check debug flag """
+        if self.debug:
             print(msg)
 
 
@@ -586,6 +638,8 @@ if __name__ == '__main__':
                         help="Excel sheet to use, defaults to first sheet")
     parser.add_argument('--verbose', action='store_true', default=False,
                         help="Show some output, default false")
+    parser.add_argument('--debug', action='store_true', default=False,
+                        help="Show lots of output, default false")
 
     args = parser.parse_args()
 

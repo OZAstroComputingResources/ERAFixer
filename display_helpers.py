@@ -2,7 +2,7 @@ from IPython.display import display_html, HTML, display
 
 def show_matches(erafixer, row_match, author):
     out ='<dl>'
-    for i, row_idx in enumerate(row_match.keys()):
+    for i, row_idx in enumerate(row_match):
         df_row = erafixer.df.iloc[row_idx]
 
         if i == 0:
