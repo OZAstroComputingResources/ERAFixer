@@ -173,7 +173,7 @@ class EraFixer(object):
                 self.df.loc[has_2015_mask, (COL_LOOKUP[col_2015])]
 
             # Mark row as handled
-            self.df.loc[has_2015_mask, ('HANDLED')] = 1
+            self.df.loc[has_2015_mask, ('HANDLED')] = 2
 
     def set_forc_string(self, forc_string, justify_string=None, author=None, journal=None):
         self._print("Applying FORC_STRING '{}'".format(forc_string))
@@ -195,6 +195,9 @@ class EraFixer(object):
             matching_indices = self.get_matching_rows(0, 'HANDLED', skip_handled=True, blank_discipline=False)
 
         for idx, row in self.df.loc[matching_indices].iterrows():
+            # Save the FORC_STRING
+            self.df.set_value(idx, 'FORC_STRING', forc_string)
+
             default_code1 = str(row.loc[COL_LOOKUP['for1_e18']])
             default_code2 = str(row.loc[COL_LOOKUP['for2_e18']])
             default_code3 = str(row.loc[COL_LOOKUP['for3_e18']])
@@ -264,9 +267,16 @@ class EraFixer(object):
                     self.df.HANDLED = self.df.HANDLED.apply(str)
                     self.df.set_value(idx, 'HANDLED', 99)
                 else:
-                    missing_code_1 = (default_code1_present and not code1_present)
-                    missing_code_2 = (default_code2_present and not code2_present)
-                    missing_code_3 = (default_code3_present and not code3_present)
+                    # First check if code is missing (blank)
+                    missing_code_1 = default_code1_present and not code1_present
+                    missing_code_2 = default_code2_present and not code2_present
+                    missing_code_3 = default_code3_present and not code3_present
+
+                    # Then check if code doesn't match (NOTE: The above is probably
+                    # redundant but a little cleaner to read)
+                    missing_code_1 = missing_code_1 or (default_code1 != code1)
+                    missing_code_2 = missing_code_2 or (default_code2 != code2)
+                    missing_code_3 = missing_code_3 or (default_code3 != code3)
 
                     if missing_code_1:
                         self._debug("Missing code 1, Default: {} \t Provided: {}".format(default_code1, code1))
@@ -291,24 +301,34 @@ class EraFixer(object):
                     if (code1_present and (missing_code_2 or missing_code_3)):
                         self._debug("Multiple codes given but not present, setting justify")
                         if missing_code_2:
-                            if code2_perc > 66:
+                            if code2_perc >= 66:
                                 self.df.set_value(idx, COL_LOOKUP['for4_e18'], code2)
                                 self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code2_perc)
                                 self._debug("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+
+                                # Set code 1 to remaining percentage
+                                self.df.set_value(idx, COL_LOOKUP['for1perc_e18'], 100 - code2_perc)
+
                                 self.df.set_value(idx, 'HANDLED', 1)
                             else:
                                 self._debug("Missing code is less than 66%, setting HANDLED=99")
                                 self.df.set_value(idx, 'HANDLED', 99)
 
-                        if missing_code_3:
-                            if code3_perc > 66:
+                        elif missing_code_3:
+                            if code3_perc >= 66:
                                 self.df.set_value(idx, COL_LOOKUP['for4_e18'], code3)
                                 self.df.set_value(idx, COL_LOOKUP['for4perc_e18'], code3_perc)
                                 self._debug("Missing code is greater than 66%, putting in FOR4 and setting HANDLED=1")
+
+                                # Set code 1 and 2 to remaining percentage split evenly
+                                self.df.set_value(idx, COL_LOOKUP['for1perc_e18'], 100 - int(code3_perc / 2))
+                                self.df.set_value(idx, COL_LOOKUP['for2perc_e18'], 100 - int(code3_perc / 2))
+
                                 self.df.set_value(idx, 'HANDLED', 1)
                             else:
                                 self._debug("Missing code is less than 66%, setting HANDLED=99 (ClawbackNeeded)")
                                 self.df.set_value(idx, 'HANDLED', 99)
+
                         elif(code1_present and code2_present and code3_present):
                             self._debug("Multiple codes given but not present, setting HANDLED=-1 (confused)")
                             self.df.set_value(idx, 'HANDLED', -1)
@@ -572,6 +592,10 @@ class EraFixer(object):
         if 'DISCIPLINE' not in self.df.columns:
             self._debug("Adding DISCIPLINE (default NaN) column to spreadsheet")
             self.df['DISCIPLINE'] = np.nan
+
+        if 'FORC_STRING' not in self.df.columns:
+            self._debug("Adding FORC_STRING (default NaN) column to spreadsheet")
+            self.df['FORC_STRING'] = np.nan
 
         # Clean some dtypes
         dtypes = {
